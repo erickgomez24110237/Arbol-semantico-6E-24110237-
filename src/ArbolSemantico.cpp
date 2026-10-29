@@ -13,6 +13,7 @@
 #include <SFML/Graphics.hpp>
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -141,10 +142,19 @@ struct AtomTable {
 //  Analizador de lenguaje natural (espanol)
 //  Precedencia (de menor a mayor):  <->  <  ->  <  o  <  y  <  no
 // ----------------------------------------------------------------------------
+static char foldCodepoint(sf::Uint32 c);  // definida mas abajo
+
 static vector<string> normalizeWords(const string& s) {
     string o;
-    for (unsigned char c : s) {
-        if (c >= 128) continue;  // la entrada ya viene sin acentos
+    for (size_t i = 0; i < s.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c == 0xC3 && i + 1 < s.size()) {  // letra acentuada en UTF-8 (a, e, i, o, u, n)
+            sf::Uint32 cp = ((c & 0x1Fu) << 6) | (static_cast<unsigned char>(s[i + 1]) & 0x3Fu);
+            if (char f = foldCodepoint(cp)) o += f;
+            ++i;
+            continue;
+        }
+        if (c >= 128) continue;
         char ch = static_cast<char>(std::tolower(c));
         if (ch == ',' || ch == '.' || ch == ';' || ch == ':' || ch == '?' || ch == '!') ch = ' ';
         if (ch == '(' || ch == ')') { o += ' '; o += ch; o += ' '; }
@@ -663,6 +673,37 @@ static float drawSidebar(sf::RenderTarget& rt, const App& app, float sideW) {
 }
 
 // ----------------------------------------------------------------------------
+//  Persistencia: las reglas se guardan en un archivo de texto (una por linea)
+//  en la carpeta desde la que se ejecuta el programa.
+// ----------------------------------------------------------------------------
+static const char* RULES_FILE = "reglas_guardadas.txt";
+
+// Devuelve false si el archivo no existe (primera ejecucion).
+static bool loadRules(const string& path, vector<string>& out) {
+    std::ifstream in(path);
+    if (!in) return false;
+    string line;
+    while (std::getline(in, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+        if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
+            static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF)
+            line.erase(0, 3);  // BOM UTF-8
+        if (line.empty()) continue;
+        AtomTable tmp;
+        try { parseRule(line, tmp); out.push_back(line); }
+        catch (const std::exception&) { /* linea invalida: se ignora */ }
+    }
+    return true;
+}
+
+static bool saveRules(const string& path, const vector<string>& rules) {
+    std::ofstream o(path, std::ios::trunc);
+    if (!o) return false;
+    for (const auto& r : rules) o << r << "\n";
+    return static_cast<bool>(o);
+}
+
+// ----------------------------------------------------------------------------
 //  main
 // ----------------------------------------------------------------------------
 int main() {
@@ -679,10 +720,12 @@ int main() {
     const float SIDEBAR = 380, HEADER = 78, INPUT_H = 130;
 
     App app;
-    app.rulesText = {"Si es de dia, entonces voy a trabajar",
-                     "Si llueve, entonces no voy a trabajar",
-                     "Es de dia"};
+    if (!loadRules(RULES_FILE, app.rulesText))  // primera vez: caso de prueba del video
+        app.rulesText = {"Si es de dia, entonces voy a trabajar",
+                         "Si llueve, entonces no voy a trabajar",
+                         "Es de dia"};
     app.rebuild();
+    saveRules(RULES_FILE, app.rulesText);
 
     string userInput, errMsg;
     float sideScroll = 0, sideContentH = 0;
@@ -717,6 +760,8 @@ int main() {
                             userInput.clear();
                             errMsg.clear();
                             fitView();
+                            if (!saveRules(RULES_FILE, app.rulesText))
+                                errMsg = "No se pudo guardar en reglas_guardadas.txt";
                         } else errMsg = err;
                     }
                 } else if (c >= 32 && c < 127) {
@@ -732,6 +777,8 @@ int main() {
                     app.rulesText.pop_back();
                     app.rebuild();
                     fitView();
+                    if (!saveRules(RULES_FILE, app.rulesText))
+                        errMsg = "No se pudo guardar en reglas_guardadas.txt";
                 } else if (event.key.code == sf::Keyboard::Home) {
                     fitView();
                 }

@@ -1,0 +1,4 @@
+Si es de dia, entonces voy a trabajar
+Si llueve, entonces no voy a trabajar
+Es de dia
+Si hace frio, entonces llevo chamarra
